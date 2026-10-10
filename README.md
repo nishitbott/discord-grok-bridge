@@ -286,3 +286,7 @@ node --env-file=.env dist/index.js
 | `cd listener && npm run build` | Compile the listener to `listener/dist` |
 | `cd listener && npm start` | Run `node dist/index.js` |
 | `cd listener && npm run lint` | ESLint for the listener |
+
+## Kill switch
+
+`GATEWAY_ENABLED` must be `"true"` for `/api/gateway/run` (cron, self-chain, dashboard button) to open a Discord session. Any other value makes the route return `{skipped:true}`. Keep it off while another gateway (e.g. Discord Digest) answers the same mentions.

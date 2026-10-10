@@ -78,6 +78,11 @@ async function handle(request: Request): Promise<Response> {
     return new Response("unauthorized", { status: 401 });
   }
 
+  // Kill switch: the gateway only runs when GATEWAY_ENABLED is "true".
+  if ((process.env.GATEWAY_ENABLED ?? "").trim().toLowerCase() !== "true") {
+    return Response.json({ skipped: true, reason: "GATEWAY_ENABLED is not true" });
+  }
+
   const configError = assertGatewayConfig(loadGatewayConfig());
   if (configError) {
     return Response.json(
