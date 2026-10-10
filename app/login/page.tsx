@@ -24,7 +24,7 @@ export default async function LoginPage() {
     <main className="mx-auto flex min-h-screen w-full max-w-md items-center px-4">
       <Card className="w-full">
         <CardHeader>
-          <CardTitle>Discord Grok Bridge</CardTitle>
+          <CardTitle>Discord Mention Bridge</CardTitle>
           <CardDescription>Sign in with the admin key to view the console.</CardDescription>
         </CardHeader>
         <CardContent>

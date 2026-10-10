@@ -3,6 +3,11 @@ import { NextResponse, type NextRequest } from "next/server";
 import { constantTimeEqual, SESSION_COOKIE, sha256Hex } from "@/lib/session";
 
 export async function middleware(request: NextRequest) {
+  const { pathname } = request.nextUrl;
+  if (pathname === "/login" || pathname.startsWith("/api/ingest")) {
+    return NextResponse.next();
+  }
+
   const adminKey = process.env.ADMIN_KEY;
   const session = request.cookies.get(SESSION_COOKIE)?.value;
   const expected = adminKey ? await sha256Hex(adminKey) : null;
@@ -18,5 +23,5 @@ export async function middleware(request: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/((?!login|api/interactions|_next|favicon.ico).*)"],
+  matcher: ["/((?!_next/static|_next/image|favicon.ico).*)"],
 };

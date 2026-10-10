@@ -23,7 +23,7 @@ export function CreateKeyForm({ disabled }: { disabled: boolean }) {
             maxLength={64}
             required
             disabled={disabled || pending}
-            placeholder="digest-worker"
+            placeholder="railway-listener"
           />
         </div>
         <Button type="submit" disabled={disabled || pending}>

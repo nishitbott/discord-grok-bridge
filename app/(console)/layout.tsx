@@ -14,7 +14,7 @@ export default function ConsoleLayout({
     <div className="min-h-screen">
       <header className="border-b bg-card">
         <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-4">
-          <p className="text-sm font-semibold tracking-tight">Discord Grok Bridge</p>
+          <p className="text-sm font-semibold tracking-tight">Discord Mention Bridge</p>
           <nav className="flex items-center gap-1" aria-label="Console">
             <Button asChild variant="ghost" size="sm">
               <Link href="/">Status</Link>

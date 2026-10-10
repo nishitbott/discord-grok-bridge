@@ -14,47 +14,74 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { envChecks, isEnvOk } from "@/lib/env";
-import { isStoreReachable, listInteractions } from "@/lib/store";
+import { envChecks, isAdminConfigured } from "@/lib/env";
+import { isHeartbeatFresh, mentionRows } from "@/lib/mentions";
+import { getHeartbeat, isStoreReachable, listEvents } from "@/lib/store";
 import type { WakeStatus } from "@/lib/types";
+import { WAKE_STATUSES } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function StatusPage() {
-  const [reachable, interactions] = await Promise.all([
+  const [reachable, heartbeat, events] = await Promise.all([
     isStoreReachable(),
-    listInteractions(20),
+    getHeartbeat(),
+    listEvents(),
   ]);
-  const envOk = isEnvOk();
   const checks = envChecks();
+  const online = heartbeat ? isHeartbeatFresh(heartbeat.receivedAt) : false;
+  const mentions = mentionRows(events, 20);
 
   return (
     <main className="space-y-6">
       <div>
         <h1 className="text-2xl font-semibold tracking-tight">Status</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Bridge health, configuration, and the latest slash-command interactions.
+          Listener health and the latest qualified @mentions. Discord Digest posts the reply in
+          the channel.
         </p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>Bridge health</CardTitle>
+          <CardTitle>Listener</CardTitle>
           <CardDescription>
-            Env OK means the public key, application id, wake URL, wake key, and admin key are set.
-            AI role and guild id have code defaults. Redis is optional.
+            Online when a heartbeat was received less than 90 seconds ago. The listener process
+            runs on Railway.
           </CardDescription>
         </CardHeader>
-        <CardContent className="flex flex-wrap gap-3">
-          <HealthPill label="Store" ok={reachable} okText="Reachable" badText="Unreachable" />
-          <HealthPill label="Env" ok={envOk} okText="OK" badText="Incomplete" />
+        <CardContent className="space-y-4">
+          <div className="flex flex-wrap gap-3">
+            <HealthPill label="Listener" ok={online} okText="Online" badText="Offline" />
+            <HealthPill label="Store" ok={reachable} okText="Reachable" badText="Unreachable" />
+            <HealthPill
+              label="Admin"
+              ok={isAdminConfigured()}
+              okText="Set"
+              badText="Not set"
+            />
+          </div>
+          <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <Metric label="Last heartbeat" value={heartbeat?.receivedAt ?? "—"} />
+            <Metric label="Reported at" value={heartbeat?.ts ?? "—"} />
+            <Metric label="WS ping" value={formatPing(heartbeat?.ws_ping)} />
+            <Metric label="Queue depth" value={heartbeat ? String(heartbeat.queue_depth) : "—"} />
+            <Metric label="Uptime" value={heartbeat ? `${heartbeat.uptime_s}s` : "—"} />
+            <Metric
+              label="Version"
+              value={heartbeat?.version ? heartbeat.version : "—"}
+            />
+          </dl>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader>
           <CardTitle>Configuration</CardTitle>
-          <CardDescription>Whether each variable is present. Values are never shown.</CardDescription>
+          <CardDescription>
+            Whether each dashboard variable is present. Values are never shown. Bot token, wake
+            URL, and the listener API key live on Railway, not in this Vercel project.
+          </CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
@@ -82,61 +109,58 @@ export default async function StatusPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle>Recent interactions</CardTitle>
-          <CardDescription>Last 20 of the 200 most recent records.</CardDescription>
+          <CardTitle>Recent mentions</CardTitle>
+          <CardDescription>Last 20 qualified mentions reported by the listener.</CardDescription>
         </CardHeader>
         <CardContent>
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>User</TableHead>
-                <TableHead>Question</TableHead>
+                <TableHead>Author</TableHead>
+                <TableHead>Text</TableHead>
                 <TableHead>Time</TableHead>
                 <TableHead>Wake</TableHead>
-                <TableHead>Attempts</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {interactions.length === 0 ? (
+              {mentions.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={5} className="text-muted-foreground">
-                    No interactions recorded yet.
+                  <TableCell colSpan={4} className="text-muted-foreground">
+                    No mentions recorded yet.
                   </TableCell>
                 </TableRow>
               ) : (
-                interactions.map((interaction) => (
-                  <TableRow key={interaction.id}>
+                mentions.map((mention) => (
+                  <TableRow key={mention.messageId}>
                     <TableCell>
-                      <div className="font-medium">{interaction.username || "unknown"}</div>
+                      <div className="font-medium">{mention.author || "unknown"}</div>
                       <div className="font-mono text-xs text-muted-foreground">
-                        {interaction.userId || "—"}
+                        {mention.channelId || "—"}
                       </div>
                     </TableCell>
-                    <TableCell className="max-w-xs" title={interaction.question}>
+                    <TableCell className="max-w-xs" title={mention.textPreview}>
                       <span className="line-clamp-2 break-words">
-                        {truncate(interaction.question, 80) || "—"}
+                        {mention.textPreview || "—"}
                       </span>
                     </TableCell>
                     <TableCell className="whitespace-nowrap font-mono text-xs">
-                      {interaction.receivedAt || "—"}
+                      {mention.ts || "—"}
+                      {mention.backfill ? (
+                        <div className="mt-1">
+                          <Badge variant="outline">backfill</Badge>
+                        </div>
+                      ) : null}
                     </TableCell>
                     <TableCell>
-                      <WakeBadge status={interaction.wakeStatus} />
-                    </TableCell>
-                    <TableCell>
-                      {interaction.attempts.length === 0 ? (
-                        <span className="text-muted-foreground">—</span>
-                      ) : (
-                        <ul className="space-y-1">
-                          {interaction.attempts.map((attempt) => (
-                            <li key={`${interaction.id}-${attempt.attempt}`} className="text-xs">
-                              <span className="font-medium">#{attempt.attempt}</span> {attempt.status}
-                              {attempt.httpStatus !== null ? ` HTTP ${attempt.httpStatus}` : ""}
-                              {attempt.error ? ` (${attempt.error})` : ""}
-                            </li>
-                          ))}
-                        </ul>
-                      )}
+                      <WakeBadge status={mention.wakeStatus} />
+                      {mention.attempts !== null || mention.httpStatus !== null ? (
+                        <div className="mt-1 text-xs text-muted-foreground">
+                          {mention.attempts !== null ? `${mention.attempts} attempts` : ""}
+                          {mention.httpStatus !== null
+                            ? `${mention.attempts !== null ? " · " : ""}HTTP ${mention.httpStatus}`
+                            : ""}
+                        </div>
+                      ) : null}
                     </TableCell>
                   </TableRow>
                 ))
@@ -168,13 +192,27 @@ function HealthPill({
   );
 }
 
-function WakeBadge({ status }: { status: WakeStatus }) {
-  return <Badge variant={status}>{status}</Badge>;
+function Metric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-lg border px-3 py-2">
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-1 font-mono text-sm break-all">{value}</dd>
+    </div>
+  );
 }
 
-function truncate(value: string, max: number): string {
-  if (value.length <= max) {
-    return value;
+function WakeBadge({ status }: { status: string }) {
+  const variant = isWakeStatus(status) ? status : "pending";
+  return <Badge variant={variant}>{status || "pending"}</Badge>;
+}
+
+function isWakeStatus(value: string): value is WakeStatus {
+  return WAKE_STATUSES.some((status) => status === value);
+}
+
+function formatPing(ping: number | undefined): string {
+  if (ping === undefined || !Number.isFinite(ping) || ping < 0) {
+    return "—";
   }
-  return `${value.slice(0, max - 1)}…`;
+  return `${Math.round(ping)} ms`;
 }

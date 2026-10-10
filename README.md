@@ -1,47 +1,35 @@
-# Discord Grok Bridge
+# Discord Mention Bridge
 
-Next.js bridge that accepts the Discord `/grok` slash command, checks the caller has the AI role, and forwards the question to a wake endpoint (Discord Digest). The admin console shows bridge health, recent interactions, and hashed API keys.
+A Discord @mention bridge. An always-on listener on Railway watches the guild gateway. When a qualified mention or reply arrives, it shows a typing indicator and wakes Discord Digest. Discord Digest posts the reply in the channel itself. The listener never sends message text. A Next.js dashboard on Vercel stores listener heartbeats, mention events, and hashed API keys.
 
 ## Architecture
 
-1. Discord sends every interaction to `POST /api/interactions`.
-2. The route verifies the Ed25519 signature (`x-signature-ed25519` over `timestamp + raw body`) with `DISCORD_PUBLIC_KEY` and `tweetnacl`. Missing or invalid signatures return **401**. The raw body is read before JSON parsing.
-3. A PING (`type: 1`) responds with `{ "type": 1 }`.
-4. An `APPLICATION_COMMAND` named `grok` checks `member.roles` for `AI_ROLE_ID` (default `1555107644518301717`).
-   - No role: ephemeral reply (`type: 4`, `flags: 64`) saying `You need the ai role to use /grok.`, and the interaction is stored as `rejected`.
-   - Has the role: the route returns `{ "type": 5 }` immediately (public defer, no flags). The wake call runs in `after()` so Discord gets the ack inside the 3 second window.
-5. The forwarder `POST`s the payload below to `DISCORD_WAKE_URL` with `Authorization: Bearer <DISCORD_WAKE_KEY>` and `X-Automation-Key: <DISCORD_WAKE_KEY>`. A non-2xx response or a network error is retried once after about 1.5 seconds. Each attempt is stored as `ok`, `retrying`, or `failed`, and the interaction `wake_status` is updated to match.
-6. If both attempts fail, the bridge `PATCH`es `https://discord.com/api/v10/webhooks/{application_id}/{interaction_token}/messages/@original` with `Couldn't reach Grok, try again in a minute.`
-7. Interaction records live in a Redis list capped at 200 (`LPUSH` + `LTRIM`) and a hash keyed by interaction id so later attempts can update the same row. The interaction token is sent to the wake endpoint and used for the failure `PATCH`. It is not written to Redis. The wake key is never stored.
-
-`/api/interactions` is public so Discord can call it. Every other page is behind the admin cookie. Middleware redirects anonymous requests to `/login`. The login action compares the submitted key to `ADMIN_KEY` with a timing-safe compare and sets an `httpOnly`, `secure`, `sameSite=lax` cookie containing `sha256(ADMIN_KEY)`.
-
-Discord Digest replies itself. It uses `application_id` and `interaction_token` from the wake payload to `PATCH` the original deferred message inside Discord's **15 minute** interaction token window. This bridge does not wait for that answer.
-
-## Payload contract
-
-`POST` body:
-
-```json
-{
-  "source": "slash",
-  "command": "grok",
-  "question": "What changed in the deploy?",
-  "user_id": "user snowflake",
-  "username": "display name from member.user",
-  "channel_id": "channel snowflake",
-  "guild_id": "guild snowflake",
-  "has_ai_role": true,
-  "application_id": "application snowflake",
-  "interaction_token": "discord interaction token",
-  "interaction_id": "interaction snowflake",
-  "received_at": "2026-10-09T19:33:00.000Z"
-}
+```
+Discord Gateway
+  -> mention listener (Railway, discord.js)
+      -> POST Discord Digest wake webhook
+          -> Discord Digest replies in the channel
+      -> POST dashboard /api/ingest/heartbeat and /api/ingest/events (Vercel)
 ```
 
-`user_id` and `username` come from `member.user`. `received_at` is UTC ISO-8601.
+The dashboard does not talk to Discord. It checks an admin cookie for the console and a Bearer API key for ingest. `/api/ingest/*` is public to the cookie middleware and rejected with **401** unless the bearer token hashes to a non-revoked key.
 
-Headers:
+## Qualification
+
+A message is qualified only when every condition is true:
+
+1. The bot user is @mentioned, or the message is a reply whose referenced message author id is the bot id.
+2. The author is not a bot.
+3. The author's guild member roles include `AI_ROLE_ID` (default `1555107644518301717`). The listener fetches the member when it is not cached.
+4. Text is non-empty after removing `<@BOTID>` and `<@!BOTID>` tokens and trimming.
+
+`BOT_USER_ID` defaults to `1555106101828259891`. When that env var is unset, the listener uses the logged-in bot id, then the default. `DISCORD_GUILD_ID` defaults to `1141656332609527838`. Messages outside that guild are ignored.
+
+On qualify the listener calls `sendTyping` in the channel and does not post a message. It then wakes Discord Digest once.
+
+## Wake payload
+
+`POST` to `DISCORD_WAKE_URL` (alias `BRIDGE_WAKE_URL`) with:
 
 | Header | Value |
 | --- | --- |
@@ -49,87 +37,161 @@ Headers:
 | `Authorization` | `Bearer ${DISCORD_WAKE_KEY}` |
 | `X-Automation-Key` | `${DISCORD_WAKE_KEY}` |
 
-## Environment variables
+`DISCORD_WAKE_KEY` accepts `BRIDGE_WAKE_KEY` as an alias. The key is never written to the dashboard or to logs.
 
-Copy `.env.example` to `.env.local`. Placeholders only; do not commit real values.
+Body:
 
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `DISCORD_PUBLIC_KEY` | Runtime | Ed25519 public key from the Discord application. |
-| `DISCORD_APPLICATION_ID` | Runtime and register | Application id. Also used if a payload omits `application_id`. |
-| `DISCORD_BOT_TOKEN` | Register only | `Authorization: Bot …` when registering `/grok`. |
-| `DISCORD_GUILD_ID` | Register | Guild to register the command in. Defaults to `1141656332609527838`. |
-| `AI_ROLE_ID` | Optional | Role allowed to run `/grok`. Defaults to `1555107644518301717`. |
-| `DISCORD_WAKE_URL` | Runtime | Wake endpoint (Discord Digest). |
-| `DISCORD_WAKE_KEY` | Runtime | Bearer token and `X-Automation-Key`. |
-| `ADMIN_KEY` | Console | Password for `/login`. The cookie stores its SHA-256, not the key. |
-| `UPSTASH_REDIS_REST_URL` | Optional | Upstash REST URL. |
-| `UPSTASH_REDIS_REST_TOKEN` | Optional | Upstash REST token. |
-| `KV_REST_API_URL` | Optional | Fallback URL if the Upstash names are unset. |
-| `KV_REST_API_TOKEN` | Optional | Fallback token if the Upstash names are unset. |
+```json
+{
+  "message_id": "message snowflake",
+  "channel_id": "channel snowflake",
+  "guild_id": "guild snowflake",
+  "author_id": "author snowflake",
+  "author": "username",
+  "text": "message text with the bot mention removed",
+  "ts": "2026-10-10T07:30:00.000Z",
+  "has_ai_role": true
+}
+```
 
-The status page reports **Env OK** when the public key, application id, wake URL, wake key, and admin key are set. It lists every variable above as set or not set, and never renders the values.
+`author` is the Discord username. `ts` is the message `createdAt` in UTC ISO-8601. `has_ai_role` is always `true` because unqualified authors are not woken.
 
-Without Redis credentials the bridge still verifies, defers, and forwards. History and API keys no-op and return empty.
+When the message is a reply to the bot, the body also includes:
 
-## Upstash (Vercel Marketplace)
+```json
+{
+  "is_reply_to_bot": true,
+  "replied_to_message_id": "referenced message snowflake",
+  "replied_to_content": "first 1500 characters of the referenced message"
+}
+```
 
-1. In the Vercel project, open **Storage** (or **Integrations → Marketplace**) and add **Upstash Redis**.
-2. Or from a linked project: `vercel integration add upstash`.
-3. Connect the database to this project. Vercel injects `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`.
-4. Redeploy so the functions pick up the variables.
-5. If an older integration wrote `KV_REST_API_URL` and `KV_REST_API_TOKEN` instead, those names are used when the `UPSTASH_*` pair is absent.
+When the message was found by backfill, the body also includes `"backfill": true`.
 
-The client is `@upstash/redis`. Interactions are a list capped at 200 plus a hash per interaction id. API keys store the SHA-256 hash, an 8-character prefix, name, `createdAt`, and `revoked`. The raw `dgb_` + 32-byte hex key is returned once from the create action and is not written to Redis.
+## Retry, queue, dedupe, backfill, watchdog
+
+**Immediate retry.** A wake is retried once after 2 seconds on HTTP 400, 429, 5xx, or a network error. The listener logs the response body with the wake key, wake URL, bot token, and dashboard credentials redacted. Other secrets are not logged.
+
+**Queue.** If the wake is still failing, it is appended to `DATA_DIR/pending.jsonl` (default `./data/pending.jsonl`). The file is drained every 60 seconds with exponential backoff (60s, 120s, … capped at 30 minutes). After about 10 POST attempts the item is marked failed and left in the file. Dashboard reporting failures never crash the process.
+
+**Dedupe.** Woken message ids are stored in `DATA_DIR/woken.json`, capped at about 5000. A message id is never woken twice. Queue drains are retries of the same wake, not a second wake.
+
+**Last seen.** Every message seen in the guild updates `DATA_DIR/last_seen.json` with the newest message id for that channel.
+
+**Backfill.** On ready, and again on reconnect or resume, the listener walks each text and announcement channel in the guild. A channel with no `last_seen` entry only stores the latest message id and does not replay history. A channel with `last_seen` fetches messages after that id, not older than 24 hours (snowflake floor) and not more than 500 messages, oldest first. Those messages use the same qualification, dedupe, and typing behavior, and the wake body sets `backfill` to `true`.
+
+**Watchdog.** Every 30 seconds the listener reads `client.ws.ping` and the shard heartbeat ACK (`lastPingTimestamp`) plus ready/resume activity. If there has been no ACK or ready activity for more than 90 seconds, or the socket stays disconnected / reconnecting and looks zombie, the client is destroyed and logs in again.
+
+## Dashboard ingest
+
+Every 30 seconds, and once when the gateway becomes ready, the listener posts:
+
+`POST ${DASHBOARD_URL}/api/ingest/heartbeat`
+
+```json
+{
+  "uptime_s": 120,
+  "ws_ping": 42,
+  "guilds": 1,
+  "queue_depth": 0,
+  "version": "0.1.0",
+  "ts": "2026-10-10T07:30:00.000Z"
+}
+```
+
+`POST ${DASHBOARD_URL}/api/ingest/events` with batches:
+
+```json
+{
+  "events": [
+    {
+      "type": "mention",
+      "message_id": "snowflake",
+      "channel_id": "snowflake",
+      "author": "username",
+      "text_preview": "up to 120 characters",
+      "wake_status": "ok",
+      "http_status": 200,
+      "attempts": 1,
+      "ts": "2026-10-10T07:30:00.000Z"
+    }
+  ]
+}
+```
+
+`type` is `mention`, `wake`, `error`, `backfill`, or `reconnect`. `wake_status` is `ok`, `retrying`, `failed`, or `queued`. Optional fields are omitted when they do not apply. The auth header is `Authorization: Bearer ${LISTENER_API_KEY}`.
+
+The dashboard hashes that key with SHA-256 and loads `dgb:api-key:<hash>`. Missing, unknown, and revoked keys return **401**. A match updates `lastUsedAt`. The latest heartbeat is stored with the time it was received. Events are an Upstash list capped at 500. The status page treats the listener as online when that heartbeat is less than 90 seconds old.
+
+## Deploy the dashboard on Vercel
+
+1. Import this repository as a Next.js App Router project. The `listener/` directory is excluded from the Next build, TypeScript project, and root ESLint run.
+2. Set `ADMIN_KEY` in the Vercel project environment.
+3. Add **Upstash Redis** from the Vercel Marketplace (**Storage** or **Integrations → Marketplace**, or `vercel integration add upstash` on a linked project) and connect it to this project. Vercel injects `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN`. If an older integration wrote `KV_REST_API_URL` and `KV_REST_API_TOKEN` instead, those names are used when the `UPSTASH_*` pair is absent.
+4. Redeploy so the functions see the variables.
+5. Open `/login`, sign in with `ADMIN_KEY`, and create a listener key on `/settings`. The raw `dgb_` key is shown once. It is not stored; Redis keeps the SHA-256 hash, an 8-character prefix, the name, `createdAt`, `lastUsedAt`, and `revoked`.
+
+Without Redis the console still loads. Heartbeats, events, and API keys are empty, and ingest returns **401**.
+
+The status page shows listener online/offline, last heartbeat time, websocket ping, and queue depth, plus the 20 most recent mentions and a wake-status badge. Configuration checks are booleans only (`ADMIN_KEY` and the Upstash variable names). Listener secrets are not part of the Vercel project.
+
+## Deploy the listener on Railway
+
+The listener is its own Node package in `listener/`. Railway should use that directory as the service root.
+
+1. Create a Railway service from this repo with **root directory** `listener/`.
+2. `listener/railway.json` selects the Dockerfile builder (`dockerfilePath`: `Dockerfile`) and restart policy `ALWAYS`.
+3. The image is a multi-stage `node:20-alpine` build: `npm ci`, `tsc`, `npm prune --omit=dev`, then `node dist/index.js`.
+4. Add a volume mounted at `/app/data`. The image declares `VOLUME /app/data` and defaults `DATA_DIR` to that path. The queue, dedupe set, and last-seen map live on the volume so restarts do not wake the same messages twice or lose pending retries.
+5. Set:
+
+| Variable | Purpose |
+| --- | --- |
+| `DISCORD_BOT_TOKEN` | Bot token from the Discord Developer Portal |
+| `BOT_USER_ID` | Optional. Default `1555106101828259891`, otherwise the logged-in bot id |
+| `AI_ROLE_ID` | Optional. Default `1555107644518301717` |
+| `DISCORD_GUILD_ID` | Optional. Default `1141656332609527838` |
+| `DISCORD_WAKE_URL` | Discord Digest wake URL (`BRIDGE_WAKE_URL` alias) |
+| `DISCORD_WAKE_KEY` | Wake bearer token (`BRIDGE_WAKE_KEY` alias) |
+| `DASHBOARD_URL` | Vercel origin, no path, such as `https://your-app.vercel.app` |
+| `LISTENER_API_KEY` | Raw key created on `/settings` |
+| `DATA_DIR` | Optional. Default `./data`; use `/app/data` on Railway |
+
+Copy `listener/.env.example`. Placeholders only; do not commit real values.
+
+### Fly.io
+
+From `listener/`, a Docker Machine can run the same image. Create a persistent volume and mount it at `/app/data`. Set the same environment variables. No public HTTP port is required; this is a worker process.
+
+```toml
+[mounts]
+  source = "listener_data"
+  destination = "/app/data"
+```
+
+### Render
+
+Create a **Background Worker** using the `listener/` Dockerfile. Add a persistent disk mounted at `/app/data` and set the same environment variables. The worker does not need a public URL.
 
 ## Discord Developer Portal
 
-1. Open the [Discord Developer Portal](https://discord.com/developers/applications) and select (or create) the application.
-2. **General Information**: copy the Application ID into `DISCORD_APPLICATION_ID` and the Public Key into `DISCORD_PUBLIC_KEY`.
-3. **Bot**: reset the token into `DISCORD_BOT_TOKEN`. This token is only used by `npm run register`.
-4. Invite the bot to the guild with the `bot` and `applications.commands` scopes.
-5. Copy the guild id into `DISCORD_GUILD_ID` and the AI role id into `AI_ROLE_ID`.
-6. Deploy this app, then set **Interactions Endpoint URL** to `https://<app>/api/interactions`. Discord sends a PING; a valid signature must get `{ "type": 1 }` or the URL will not save.
+1. Open the [Discord Developer Portal](https://discord.com/developers/applications) and select the application.
+2. **Bot**: reset the token into `DISCORD_BOT_TOKEN` on Railway.
+3. **Privileged Gateway Intents**: enable **Message Content Intent** and **Server Members Intent**. Both are required. Without them the listener cannot read mention text or role membership.
+4. **Interactions Endpoint URL**: clear it and save. This bridge does not receive slash-command interactions. Leaving the old `/api/interactions` URL in place makes Discord keep posting to a route that no longer exists.
+5. Invite the bot with the `bot` scope and permission integer **68608**:
 
-## Register `/grok`
-
-With `.env.local` (or the variables already exported):
-
-```bash
-npm run register
+```
+https://discord.com/oauth2/authorize?client_id=YOUR_APPLICATION_ID&permissions=68608&scope=bot
 ```
 
-That runs `scripts/register-commands.ts`, which loads `.env.local` when the file exists (`process.loadEnvFile`) and `PUT`s the guild command:
+That integer is View Channels (`1024`) + Send Messages (`2048`) + Read Message History (`65536`). Send Messages is what allows the typing indicator. The listener still never posts message content.
 
-```json
-[
-  {
-    "name": "grok",
-    "description": "Ask Grok",
-    "type": 1,
-    "options": [
-      {
-        "type": 3,
-        "name": "question",
-        "description": "Your question",
-        "required": true
-      }
-    ]
-  }
-]
-```
-
-`PUT https://discord.com/api/v10/applications/{DISCORD_APPLICATION_ID}/guilds/{DISCORD_GUILD_ID}/commands` with `Authorization: Bot ${DISCORD_BOT_TOKEN}`.
-
-## Vercel deploy
-
-1. Import this repository as a Next.js project (App Router, Node.js runtime).
-2. Add the environment variables from the table. Use the Marketplace integration for Upstash rather than pasting tokens into git.
-3. Deploy.
-4. Set the Discord Interactions Endpoint URL to `https://<deployment-domain>/api/interactions`.
-5. Run `npm run register` from a machine that has the bot token and application id.
+6. Create the listener API key in the dashboard `/settings` page and set `LISTENER_API_KEY` on the listener host.
 
 ## Local development
+
+Dashboard:
 
 ```bash
 cp .env.example .env.local
@@ -138,12 +200,26 @@ npm run dev
 
 Open `/login` and sign in with `ADMIN_KEY`. `/` is the status page. `/settings` creates and revokes API keys.
 
+Listener (Node.js 20+):
+
+```bash
+cd listener
+cp .env.example .env
+npm install
+npm run build
+node --env-file=.env dist/index.js
+```
+
+`npm start` runs `node dist/index.js` and expects the environment to already be injected, which is how Railway, Fly, and Render run it.
+
 ## Scripts
 
 | Script | Purpose |
 | --- | --- |
 | `npm run dev` | Next.js dev server |
-| `npm run build` | Production build |
-| `npm run lint` | ESLint (Next.js core web vitals + TypeScript) |
-| `npm run typecheck` | `tsc --noEmit` |
-| `npm run register` | Register the guild `/grok` command |
+| `npm run build` | Production dashboard build |
+| `npm run lint` | ESLint for the dashboard (ignores `listener/`) |
+| `npm run typecheck` | `tsc --noEmit` for the dashboard |
+| `cd listener && npm run build` | Compile the listener to `listener/dist` |
+| `cd listener && npm start` | Run `node dist/index.js` |
+| `cd listener && npm run lint` | ESLint for the listener |

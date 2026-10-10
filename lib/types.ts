@@ -1,35 +1,31 @@
-export const WAKE_STATUSES = [
-  "ok",
-  "retrying",
-  "failed",
-  "rejected",
-  "pending",
-] as const;
+export const WAKE_STATUSES = ["ok", "retrying", "failed", "queued"] as const;
 
 export type WakeStatus = (typeof WAKE_STATUSES)[number];
 
-export const ATTEMPT_STATUSES = ["ok", "retrying", "failed"] as const;
+export const EVENT_TYPES = ["mention", "wake", "error", "backfill", "reconnect"] as const;
 
-export type AttemptStatus = (typeof ATTEMPT_STATUSES)[number];
+export type ListenerEventType = (typeof EVENT_TYPES)[number];
 
-export interface AttemptRecord {
-  attempt: number;
-  httpStatus: number | null;
-  error: string | null;
-  timestamp: string;
-  status: AttemptStatus;
+export interface ListenerEvent {
+  type: ListenerEventType;
+  message_id?: string;
+  channel_id?: string;
+  author?: string;
+  text_preview?: string;
+  wake_status?: WakeStatus;
+  http_status?: number;
+  attempts?: number;
+  ts: string;
 }
 
-export interface InteractionRecord {
-  id: string;
-  userId: string;
-  username: string;
-  question: string;
-  channelId: string;
-  guildId: string;
+export interface HeartbeatRecord {
+  uptime_s: number;
+  ws_ping: number;
+  guilds: number;
+  queue_depth: number;
+  version: string;
+  ts: string;
   receivedAt: string;
-  wakeStatus: WakeStatus;
-  attempts: AttemptRecord[];
 }
 
 export interface ApiKeyRecord {
@@ -38,19 +34,8 @@ export interface ApiKeyRecord {
   name: string;
   createdAt: string;
   revoked: boolean;
+  lastUsedAt?: string;
 }
 
-export interface WakePayload {
-  source: "slash";
-  command: "grok";
-  question: string;
-  user_id: string;
-  username: string;
-  channel_id: string;
-  guild_id: string;
-  has_ai_role: boolean;
-  application_id: string;
-  interaction_token: string;
-  interaction_id: string;
-  received_at: string;
-}
+export const HEARTBEAT_STALE_MS = 90_000;
+export const EVENT_LIST_CAP = 500;

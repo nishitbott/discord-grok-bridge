@@ -3,8 +3,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Discord Grok Bridge",
-  description: "Admin console for the Discord to Grok slash-command bridge.",
+  title: "Discord Mention Bridge",
+  description: "Admin console for the Discord @mention listener.",
   robots: { index: false, follow: false },
 };
 

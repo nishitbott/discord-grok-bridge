@@ -1,26 +1,20 @@
 import { randomBytes } from "node:crypto";
 import { Redis } from "@upstash/redis";
 
+import { parseStoredEvent } from "@/lib/ingest";
 import { sha256Hex } from "@/lib/session";
-import type {
-  ApiKeyRecord,
-  AttemptRecord,
-  AttemptStatus,
-  InteractionRecord,
-  WakeStatus,
-} from "@/lib/types";
-import { ATTEMPT_STATUSES, WAKE_STATUSES } from "@/lib/types";
+import type { ApiKeyRecord, HeartbeatRecord, ListenerEvent } from "@/lib/types";
+import { EVENT_LIST_CAP } from "@/lib/types";
 
-const INTERACTIONS_LIST = "dgb:interactions";
 const API_KEYS_LIST = "dgb:api-keys";
-const LIST_CAP = 200;
+const HEARTBEAT_KEY = "dgb:listener:heartbeat";
+const EVENTS_LIST = "dgb:listener:events";
 
 let client: Redis | null = null;
 
 function credentials(): { url: string; token: string } | null {
   const url = process.env.UPSTASH_REDIS_REST_URL || process.env.KV_REST_API_URL;
-  const token =
-    process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
+  const token = process.env.UPSTASH_REDIS_REST_TOKEN || process.env.KV_REST_API_TOKEN;
   if (!url || !token) {
     return null;
   }
@@ -46,10 +40,6 @@ function getRedis(): Redis | null {
   return client;
 }
 
-function interactionKey(id: string): string {
-  return `dgb:interaction:${id}`;
-}
-
 function apiKeyKey(hash: string): string {
   return `dgb:api-key:${hash}`;
 }
@@ -67,60 +57,99 @@ export async function isStoreReachable(): Promise<boolean> {
   }
 }
 
-export async function saveInteraction(record: InteractionRecord): Promise<void> {
+export async function authorizeApiKey(rawKey: string): Promise<boolean> {
   const redis = getRedis();
-  if (!redis || !record.id) {
-    return;
+  if (!redis || !rawKey) {
+    return false;
   }
 
   try {
-    await redis.hset(interactionKey(record.id), toInteractionHash(record));
-    await redis.lpush(INTERACTIONS_LIST, record.id);
-    const overflow: unknown = await redis.lindex(INTERACTIONS_LIST, LIST_CAP);
-    await redis.ltrim(INTERACTIONS_LIST, 0, LIST_CAP - 1);
-    if (typeof overflow === "string" && overflow.length > 0 && overflow !== record.id) {
-      await redis.del(interactionKey(overflow));
+    const hash = await sha256Hex(rawKey);
+    const data = await redis.hgetall<Record<string, string>>(apiKeyKey(hash));
+    const record = data ? parseApiKey(data) : null;
+    if (!record || record.revoked) {
+      return false;
     }
+    record.lastUsedAt = new Date().toISOString();
+    try {
+      await redis.hset(apiKeyKey(hash), toApiKeyHash(record));
+    } catch {
+      console.error("Failed to update API key lastUsedAt");
+    }
+    return true;
   } catch {
-    console.error("Failed to save interaction", { interactionId: record.id });
+    console.error("Failed to authorize API key");
+    return false;
   }
 }
 
-export async function updateInteraction(record: InteractionRecord): Promise<void> {
+export async function saveHeartbeat(record: HeartbeatRecord): Promise<boolean> {
   const redis = getRedis();
-  if (!redis || !record.id) {
-    return;
+  if (!redis) {
+    return false;
+  }
+  try {
+    await redis.set(HEARTBEAT_KEY, JSON.stringify(record));
+    return true;
+  } catch {
+    console.error("Failed to save listener heartbeat");
+    return false;
+  }
+}
+
+export async function getHeartbeat(): Promise<HeartbeatRecord | null> {
+  const redis = getRedis();
+  if (!redis) {
+    return null;
+  }
+  try {
+    const raw = await redis.get<string>(HEARTBEAT_KEY);
+    return parseHeartbeatRecord(raw);
+  } catch {
+    console.error("Failed to read listener heartbeat");
+    return null;
+  }
+}
+
+export async function saveEvents(events: ListenerEvent[]): Promise<boolean> {
+  const redis = getRedis();
+  if (!redis) {
+    return false;
+  }
+  if (events.length === 0) {
+    return true;
   }
 
   try {
-    await redis.hset(interactionKey(record.id), toInteractionHash(record));
+    for (const event of events) {
+      await redis.lpush(EVENTS_LIST, JSON.stringify(event));
+    }
+    await redis.ltrim(EVENTS_LIST, 0, EVENT_LIST_CAP - 1);
+    return true;
   } catch {
-    console.error("Failed to update interaction", { interactionId: record.id });
+    console.error("Failed to save listener events");
+    return false;
   }
 }
 
-export async function listInteractions(limit = 20): Promise<InteractionRecord[]> {
+export async function listEvents(limit = EVENT_LIST_CAP): Promise<ListenerEvent[]> {
   const redis = getRedis();
   if (!redis) {
     return [];
   }
 
   try {
-    const ids = await redis.lrange<string>(INTERACTIONS_LIST, 0, limit - 1);
-    const records: InteractionRecord[] = [];
-    for (const id of ids) {
-      if (typeof id !== "string" || !id) {
-        continue;
-      }
-      const hash = await redis.hgetall<Record<string, string>>(interactionKey(id));
-      const record = hash ? parseInteraction(hash) : null;
-      if (record) {
-        records.push(record);
+    const rows = await redis.lrange<string>(EVENTS_LIST, 0, Math.max(0, limit - 1));
+    const events: ListenerEvent[] = [];
+    for (const row of rows) {
+      const event = parseStoredEvent(row);
+      if (event) {
+        events.push(event);
       }
     }
-    return records;
+    return events;
   } catch {
-    console.error("Failed to list interactions");
+    console.error("Failed to list listener events");
     return [];
   }
 }
@@ -191,48 +220,18 @@ export async function revokeApiKey(hash: string): Promise<void> {
   }
 }
 
-function toInteractionHash(record: InteractionRecord): Record<string, string> {
-  return {
-    id: record.id,
-    userId: record.userId,
-    username: record.username,
-    question: record.question,
-    channelId: record.channelId,
-    guildId: record.guildId,
-    receivedAt: record.receivedAt,
-    wakeStatus: record.wakeStatus,
-    attempts: JSON.stringify(record.attempts),
-  };
-}
-
 function toApiKeyHash(record: ApiKeyRecord): Record<string, string> {
-  return {
+  const hash: Record<string, string> = {
     hash: record.hash,
     prefix: record.prefix,
     name: record.name,
     createdAt: record.createdAt,
     revoked: record.revoked ? "true" : "false",
   };
-}
-
-function parseInteraction(hash: Record<string, string>): InteractionRecord | null {
-  const id = asString(hash.id);
-  if (!id) {
-    return null;
+  if (record.lastUsedAt) {
+    hash.lastUsedAt = record.lastUsedAt;
   }
-
-  const wakeStatus = asWakeStatus(hash.wakeStatus);
-  return {
-    id,
-    userId: asString(hash.userId),
-    username: asString(hash.username),
-    question: asString(hash.question),
-    channelId: asString(hash.channelId),
-    guildId: asString(hash.guildId),
-    receivedAt: asString(hash.receivedAt),
-    wakeStatus,
-    attempts: parseAttempts(hash.attempts),
-  };
+  return hash;
 }
 
 function parseApiKey(hash: Record<string, string>): ApiKeyRecord | null {
@@ -242,49 +241,44 @@ function parseApiKey(hash: Record<string, string>): ApiKeyRecord | null {
     return null;
   }
 
+  const lastUsedAt = asString(hash.lastUsedAt);
   return {
     hash: keyHash,
     prefix: asString(hash.prefix),
     name,
     createdAt: asString(hash.createdAt),
     revoked: asString(hash.revoked) === "true",
+    ...(lastUsedAt ? { lastUsedAt } : {}),
   };
 }
 
-function parseAttempts(value: unknown): AttemptRecord[] {
+function parseHeartbeatRecord(value: unknown): HeartbeatRecord | null {
   const parsed = typeof value === "string" ? safeJson(value) : value;
-  if (!Array.isArray(parsed)) {
-    return [];
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return null;
   }
-
-  const attempts: AttemptRecord[] = [];
-  for (const item of parsed) {
-    if (!item || typeof item !== "object") {
-      continue;
-    }
-    const row = item as Record<string, unknown>;
-    const status = row.status;
-    if (!isAttemptStatus(status)) {
-      continue;
-    }
-    const attempt = Number(row.attempt);
-    if (!Number.isFinite(attempt)) {
-      continue;
-    }
-    const httpStatus =
-      row.httpStatus === null || row.httpStatus === undefined || row.httpStatus === ""
-        ? null
-        : Number(row.httpStatus);
-
-    attempts.push({
-      attempt,
-      httpStatus: httpStatus !== null && Number.isFinite(httpStatus) ? httpStatus : null,
-      error: typeof row.error === "string" && row.error.length > 0 ? row.error : null,
-      timestamp: typeof row.timestamp === "string" ? row.timestamp : "",
-      status,
-    });
+  const row = parsed as Record<string, unknown>;
+  const uptime = Number(row.uptime_s);
+  const ping = Number(row.ws_ping);
+  const guilds = Number(row.guilds);
+  const depth = Number(row.queue_depth);
+  if (![uptime, ping, guilds, depth].every(Number.isFinite)) {
+    return null;
   }
-  return attempts;
+  const ts = asString(row.ts);
+  const receivedAt = asString(row.receivedAt) || ts;
+  if (!ts || !receivedAt) {
+    return null;
+  }
+  return {
+    uptime_s: uptime,
+    ws_ping: ping,
+    guilds,
+    queue_depth: depth,
+    version: asString(row.version),
+    ts,
+    receivedAt,
+  };
 }
 
 function safeJson(value: string): unknown {
@@ -297,16 +291,4 @@ function safeJson(value: string): unknown {
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
-}
-
-function asWakeStatus(value: unknown): WakeStatus {
-  return isWakeStatus(value) ? value : "pending";
-}
-
-function isWakeStatus(value: unknown): value is WakeStatus {
-  return typeof value === "string" && WAKE_STATUSES.some((status) => status === value);
-}
-
-function isAttemptStatus(value: unknown): value is AttemptStatus {
-  return typeof value === "string" && ATTEMPT_STATUSES.some((status) => status === value);
 }
