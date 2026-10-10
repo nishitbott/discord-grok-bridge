@@ -18,6 +18,10 @@ export interface ListenerEvent {
   ts: string;
 }
 
+export const LISTENER_SOURCES = ["vercel", "railway"] as const;
+
+export type ListenerSource = (typeof LISTENER_SOURCES)[number];
+
 export interface HeartbeatRecord {
   uptime_s: number;
   ws_ping: number;
@@ -26,6 +30,7 @@ export interface HeartbeatRecord {
   version: string;
   ts: string;
   receivedAt: string;
+  source?: ListenerSource;
 }
 
 export interface ApiKeyRecord {

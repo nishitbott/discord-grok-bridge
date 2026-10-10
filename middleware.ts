@@ -4,7 +4,11 @@ import { constantTimeEqual, SESSION_COOKIE, sha256Hex } from "@/lib/session";
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (pathname === "/login" || pathname.startsWith("/api/ingest")) {
+  if (
+    pathname === "/login" ||
+    pathname.startsWith("/api/ingest") ||
+    pathname.startsWith("/api/gateway")
+  ) {
     return NextResponse.next();
   }
 

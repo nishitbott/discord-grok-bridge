@@ -3,7 +3,7 @@ import { Redis } from "@upstash/redis";
 
 import { parseStoredEvent } from "@/lib/ingest";
 import { sha256Hex } from "@/lib/session";
-import type { ApiKeyRecord, HeartbeatRecord, ListenerEvent } from "@/lib/types";
+import type { ApiKeyRecord, HeartbeatRecord, ListenerEvent, ListenerSource } from "@/lib/types";
 import { EVENT_LIST_CAP } from "@/lib/types";
 
 const API_KEYS_LIST = "dgb:api-keys";
@@ -25,7 +25,7 @@ export function isStoreConfigured(): boolean {
   return credentials() !== null;
 }
 
-function getRedis(): Redis | null {
+export function getRedis(): Redis | null {
   const creds = credentials();
   if (!creds) {
     return null;
@@ -270,6 +270,7 @@ function parseHeartbeatRecord(value: unknown): HeartbeatRecord | null {
   if (!ts || !receivedAt) {
     return null;
   }
+  const source = parseListenerSource(row.source);
   return {
     uptime_s: uptime,
     ws_ping: ping,
@@ -278,7 +279,12 @@ function parseHeartbeatRecord(value: unknown): HeartbeatRecord | null {
     version: asString(row.version),
     ts,
     receivedAt,
+    ...(source ? { source } : {}),
   };
+}
+
+function parseListenerSource(value: unknown): ListenerSource | undefined {
+  return value === "vercel" || value === "railway" ? value : undefined;
 }
 
 function safeJson(value: string): unknown {

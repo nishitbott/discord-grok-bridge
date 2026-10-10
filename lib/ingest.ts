@@ -1,4 +1,10 @@
-import type { HeartbeatRecord, ListenerEvent, ListenerEventType, WakeStatus } from "@/lib/types";
+import type {
+  HeartbeatRecord,
+  ListenerEvent,
+  ListenerEventType,
+  ListenerSource,
+  WakeStatus,
+} from "@/lib/types";
 import { EVENT_TYPES, WAKE_STATUSES } from "@/lib/types";
 
 export function bearerToken(request: Request): string | null {
@@ -70,6 +76,7 @@ export function parseHeartbeat(value: unknown): Omit<HeartbeatRecord, "receivedA
     return null;
   }
 
+  const source = parseListenerSource(value.source);
   return {
     uptime_s: uptime,
     ws_ping: ping,
@@ -77,7 +84,12 @@ export function parseHeartbeat(value: unknown): Omit<HeartbeatRecord, "receivedA
     queue_depth: depth,
     version,
     ts,
+    ...(source ? { source } : {}),
   };
+}
+
+function parseListenerSource(value: unknown): ListenerSource | undefined {
+  return value === "vercel" || value === "railway" ? value : undefined;
 }
 
 export function parseEvents(value: unknown): ListenerEvent[] | null {

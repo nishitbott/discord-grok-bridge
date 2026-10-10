@@ -31,8 +31,9 @@ export default async function SettingsPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Settings</h1>
         <p className="mt-1 text-sm text-muted-foreground">
           API keys are stored as a SHA-256 hash. The raw key is shown once, when it is created.
-          Put that value in the listener&apos;s <span className="font-mono">LISTENER_API_KEY</span> on
-          Railway. The listener sends it as a Bearer token to <span className="font-mono">/api/ingest</span>.
+          The Vercel gateway writes heartbeats and events to Redis directly and does not use this
+          key. The Docker listener on Railway, Fly, or Render sends it as a Bearer token to{" "}
+          <span className="font-mono">/api/ingest</span>.
         </p>
       </div>
 

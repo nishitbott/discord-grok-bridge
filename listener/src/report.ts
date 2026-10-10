@@ -64,6 +64,7 @@ export async function postHeartbeat(
       guilds: snapshot.guilds,
       queue_depth: snapshot.queueDepth,
       version: VERSION,
+      source: "railway",
       ts: new Date().toISOString(),
     });
   } catch (error) {

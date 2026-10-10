@@ -1,0 +1,14 @@
+{
+  "fluid": true,
+  "crons": [
+    {
+      "path": "/api/gateway/run",
+      "schedule": "0 0 * * *"
+    }
+  ],
+  "functions": {
+    "app/api/gateway/run/route.ts": {
+      "maxDuration": 300
+    }
+  }
+}

@@ -1,3 +1,4 @@
+import { StartGatewayButton } from "@/components/start-gateway-button";
 import { Badge } from "@/components/ui/badge";
 import {
   Card,
@@ -15,18 +16,20 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { envChecks, isAdminConfigured } from "@/lib/env";
+import { readGatewayLock } from "@/lib/gateway/state";
 import { isHeartbeatFresh, mentionRows } from "@/lib/mentions";
 import { getHeartbeat, isStoreReachable, listEvents } from "@/lib/store";
-import type { WakeStatus } from "@/lib/types";
+import type { HeartbeatRecord, WakeStatus } from "@/lib/types";
 import { WAKE_STATUSES } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
 
 export default async function StatusPage() {
-  const [reachable, heartbeat, events] = await Promise.all([
+  const [reachable, heartbeat, events, lock] = await Promise.all([
     isStoreReachable(),
     getHeartbeat(),
     listEvents(),
+    readGatewayLock(),
   ]);
   const checks = envChecks();
   const online = heartbeat ? isHeartbeatFresh(heartbeat.receivedAt) : false;
@@ -46,8 +49,8 @@ export default async function StatusPage() {
         <CardHeader>
           <CardTitle>Listener</CardTitle>
           <CardDescription>
-            Online when a heartbeat was received less than 90 seconds ago. The listener process
-            runs on Railway.
+            Online when a heartbeat was stored less than 90 seconds ago. The primary listener is a
+            Vercel function. Railway, Fly, and Render can still run the always-on package.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -62,8 +65,11 @@ export default async function StatusPage() {
             />
           </div>
           <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <Metric label="Source" value={listenerSource(heartbeat)} />
             <Metric label="Last heartbeat" value={heartbeat?.receivedAt ?? "—"} />
             <Metric label="Reported at" value={heartbeat?.ts ?? "—"} />
+            <Metric label="Lock holder" value={lock?.holder ?? "—"} />
+            <Metric label="Lock expires" value={lock?.expiresAt ?? "—"} />
             <Metric label="WS ping" value={formatPing(heartbeat?.ws_ping)} />
             <Metric label="Queue depth" value={heartbeat ? String(heartbeat.queue_depth) : "—"} />
             <Metric label="Uptime" value={heartbeat ? `${heartbeat.uptime_s}s` : "—"} />
@@ -72,6 +78,7 @@ export default async function StatusPage() {
               value={heartbeat?.version ? heartbeat.version : "—"}
             />
           </dl>
+          <StartGatewayButton />
         </CardContent>
       </Card>
 
@@ -79,8 +86,8 @@ export default async function StatusPage() {
         <CardHeader>
           <CardTitle>Configuration</CardTitle>
           <CardDescription>
-            Whether each dashboard variable is present. Values are never shown. Bot token, wake
-            URL, and the listener API key live on Railway, not in this Vercel project.
+            Whether each variable is present. Values are never shown. Wake URL and key also count
+            as set when BRIDGE_WAKE_URL or BRIDGE_WAKE_KEY is set.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -208,6 +215,16 @@ function WakeBadge({ status }: { status: string }) {
 
 function isWakeStatus(value: string): value is WakeStatus {
   return WAKE_STATUSES.some((status) => status === value);
+}
+
+function listenerSource(heartbeat: HeartbeatRecord | null): string {
+  if (!heartbeat) {
+    return "—";
+  }
+  if (heartbeat.source === "vercel") {
+    return "vercel";
+  }
+  return "railway";
 }
 
 function formatPing(ping: number | undefined): string {
