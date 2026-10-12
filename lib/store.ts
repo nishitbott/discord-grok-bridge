@@ -284,7 +284,7 @@ function parseHeartbeatRecord(value: unknown): HeartbeatRecord | null {
 }
 
 function parseListenerSource(value: unknown): ListenerSource | undefined {
-  return value === "vercel" || value === "railway" ? value : undefined;
+  return value === "vercel" || value === "railway" || value === "render" ? value : undefined;
 }
 
 function safeJson(value: string): unknown {

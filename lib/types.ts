@@ -18,7 +18,7 @@ export interface ListenerEvent {
   ts: string;
 }
 
-export const LISTENER_SOURCES = ["vercel", "railway"] as const;
+export const LISTENER_SOURCES = ["vercel", "railway", "render"] as const;
 
 export type ListenerSource = (typeof LISTENER_SOURCES)[number];
 

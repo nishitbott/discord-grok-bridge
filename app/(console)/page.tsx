@@ -221,10 +221,7 @@ function listenerSource(heartbeat: HeartbeatRecord | null): string {
   if (!heartbeat) {
     return "—";
   }
-  if (heartbeat.source === "vercel") {
-    return "vercel";
-  }
-  return "railway";
+  return heartbeat.source ?? "railway";
 }
 
 function formatPing(ping: number | undefined): string {

@@ -89,7 +89,7 @@ export function parseHeartbeat(value: unknown): Omit<HeartbeatRecord, "receivedA
 }
 
 function parseListenerSource(value: unknown): ListenerSource | undefined {
-  return value === "vercel" || value === "railway" ? value : undefined;
+  return value === "vercel" || value === "railway" || value === "render" ? value : undefined;
 }
 
 export function parseEvents(value: unknown): ListenerEvent[] | null {
