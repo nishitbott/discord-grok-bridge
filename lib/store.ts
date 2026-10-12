@@ -40,6 +40,20 @@ export function getRedis(): Redis | null {
   return client;
 }
 
+function toRecord(value: unknown): Record<string, string> | null {
+  if (!value) {
+    return null;
+  }
+  if (Array.isArray(value)) {
+    const out: Record<string, string> = {};
+    for (let i = 0; i + 1 < value.length; i += 2) {
+      out[String(value[i])] = String(value[i + 1]);
+    }
+    return Object.keys(out).length ? out : null;
+  }
+  return value as Record<string, string>;
+}
+
 function apiKeyKey(hash: string): string {
   return `dgb:api-key:${hash}`;
 }
@@ -65,7 +79,7 @@ export async function authorizeApiKey(rawKey: string): Promise<boolean> {
 
   try {
     const hash = await sha256Hex(rawKey);
-    const data = await redis.hgetall<Record<string, string>>(apiKeyKey(hash));
+    const data = toRecord(await redis.hgetall<Record<string, string>>(apiKeyKey(hash)));
     const record = data ? parseApiKey(data) : null;
     if (!record || record.revoked) {
       return false;
@@ -188,7 +202,7 @@ export async function listApiKeys(): Promise<ApiKeyRecord[]> {
       if (typeof hash !== "string" || !hash) {
         continue;
       }
-      const data = await redis.hgetall<Record<string, string>>(apiKeyKey(hash));
+      const data = toRecord(await redis.hgetall<Record<string, string>>(apiKeyKey(hash)));
       const record = data ? parseApiKey(data) : null;
       if (record) {
         records.push(record);
@@ -208,7 +222,7 @@ export async function revokeApiKey(hash: string): Promise<void> {
   }
 
   try {
-    const data = await redis.hgetall<Record<string, string>>(apiKeyKey(hash));
+    const data = toRecord(await redis.hgetall<Record<string, string>>(apiKeyKey(hash)));
     const record = data ? parseApiKey(data) : null;
     if (!record) {
       return;
