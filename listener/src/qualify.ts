@@ -93,9 +93,24 @@ export async function qualifyMessage(
     return null;
   }
 
-  const text = visibleText(message.content, botId);
+  let text = visibleText(message.content, botId);
+  if (!text && hasReference && !reply) {
+    // Bare @mention as a reply to someone else's message: use that message as the request.
+    try {
+      const referenced = await message.fetchReference();
+      const quoted = visibleText(referenced.content, botId).slice(0, REPLY_CONTENT_LIMIT);
+      if (quoted) {
+        text = `(replying to ${referenced.author.username}'s message) ${quoted}`;
+      }
+    } catch {
+      // fall through
+    }
+  }
+  if (!text && message.attachments.size > 0) {
+    text = "(no text; see attachments)";
+  }
   if (!text) {
-    return null;
+    text = "(empty mention)";
   }
 
   return { text, reply };
