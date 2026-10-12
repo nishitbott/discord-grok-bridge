@@ -1,11 +1,12 @@
 services:
-  - type: worker
+  - type: web
     name: discord-grok-listener
     runtime: docker
-    plan: starter
+    plan: free
     region: singapore
     dockerContext: ./listener
     dockerfilePath: ./listener/Dockerfile
+    healthCheckPath: /health
     autoDeploy: true
     envVars:
       - key: DISCORD_BOT_TOKEN
@@ -16,5 +17,11 @@ services:
         sync: false
       - key: BOT_USER_ID
         sync: false
+      - key: LISTENER_API_KEY
+        sync: false
+      - key: DASHBOARD_URL
+        value: https://discord-grok-bridge.vercel.app
+      - key: LISTENER_SOURCE
+        value: render
       - key: DATA_DIR
         value: /tmp/data

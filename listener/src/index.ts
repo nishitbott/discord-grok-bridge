@@ -5,6 +5,7 @@ import { loadConfig, QUEUE_DRAIN_MS, resolveBotId } from "./config.js";
 import type { Config } from "./config.js";
 import { drainQueue } from "./deliver.js";
 import { duePending, initDisk, queueDepth } from "./disk.js";
+import { startHealthServer } from "./health.js";
 import { handleMessage } from "./handler.js";
 import { errorText, logError, logInfo, logWarn, registerSecrets } from "./log.js";
 import { flushEvents, postHeartbeat, pushEvent, startReporter } from "./report.js";
@@ -52,6 +53,15 @@ async function main(): Promise<void> {
       GatewayIntentBits.MessageContent,
       GatewayIntentBits.GuildMembers,
     ],
+  });
+
+  let lastEventAt: string | null = null;
+  client.on(Events.Raw, () => {
+    lastEventAt = new Date().toISOString();
+  });
+  startHealthServer({
+    gatewayConnected: () => client.isReady() && client.ws.status === 0,
+    lastEventAt: () => lastEventAt,
   });
 
   let backfillRunning = false;
