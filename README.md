@@ -23,7 +23,7 @@ Discord Gateway
       -> POST dashboard /api/ingest/heartbeat and /api/ingest/events
 ```
 
-The dashboard checks an admin cookie for the console. `/api/gateway/*` skips that cookie check and requires `Authorization: Bearer ${CRON_SECRET}`. `/api/ingest/*` also skips the cookie check and returns **401** unless the bearer token hashes to a non-revoked API key. The Vercel gateway does not call ingest. It writes the same Redis keys the dashboard already reads.
+The dashboard checks an admin cookie for the console. `/api/gateway/*` skips that cookie check and requires `Authorization: Bearer ${CRON_SECRET}`. `/api/ingest/*` also skips the cookie check and returns **401** unless the bearer token hashes to a non-revoked API key. `/api/watch/*` skips the cookie check and uses `WATCH_API_KEY`. The Vercel gateway does not call ingest. It writes the same Redis keys the dashboard already reads.
 
 ## Vercel gateway windows
 
@@ -170,6 +170,16 @@ The dashboard hashes that key with SHA-256 and loads `dgb:api-key:<hash>`. Missi
 
 Vercel cron sends `Authorization: Bearer ${CRON_SECRET}` when that env var is set. The gateway route checks it with a constant-time compare.
 
+## Watch API
+
+Wear OS jobs. Paths under `/api/watch` skip the admin cookie. Callers send `Authorization: Bearer ${WATCH_API_KEY}`. A missing or unset key returns **401**. The key and reply tokens are never written to the dashboard or to logs.
+
+`POST /api/watch` with `{ "prompt": "..." }` (`prompt` is 1–4000 characters) stores a job at `dgb:watch:job:<id>` for 24 hours and `LPUSH`es the id onto `dgb:watch:history` (capped at 50). The id is 16 random bytes as hex. The route generates a reply token (24 random bytes as hex), stores only its SHA-256, and `POST`s to `DISCORD_WAKE_URL` (alias `BRIDGE_WAKE_URL`) with the same headers as the Discord wake: `Authorization: Bearer ${DISCORD_WAKE_KEY}` and `X-Automation-Key`. The body uses `source` `watch`, the prompt, author `nishit (watch)`, `reply_url` `{origin}/api/watch/<id>/reply`, the reply token, and instructions not to post in Discord and to answer briefly. The origin is the request URL, or `x-forwarded-proto` plus `x-forwarded-host` when that host header is present. The wake call times out after 15 seconds. If it fails, the job status is `error`. The response is **202** `{ "id", "status" }` and does not include the reply token.
+
+`GET /api/watch` returns the newest 20 history entries that still exist, as a JSON array of `{ "id", "prompt", "status", "reply", "created_at" }`. `GET /api/watch/<id>` returns one job without `reply_token_hash`, or **404**.
+
+`POST /api/watch/<id>/reply` with `{ "reply": "..." }` sets `done`, or `{ "error": "..." }` sets `error`. The bearer token may be that job's reply token or `WATCH_API_KEY`. Repeating the same body is safe.
+
 ## Deploy on Vercel
 
 This is the primary deploy. One project runs the dashboard and the gateway.
@@ -183,6 +193,7 @@ This is the primary deploy. One project runs the dashboard and the gateway.
 | Variable | Purpose |
 | --- | --- |
 | `ADMIN_KEY` | Console password. The cookie stores `sha256(ADMIN_KEY)`. |
+| `WATCH_API_KEY` | Bearer token for `/api/watch`. See Watch API. |
 | `UPSTASH_REDIS_REST_URL` | Upstash Redis REST URL. `KV_REST_API_URL` is the fallback. |
 | `UPSTASH_REDIS_REST_TOKEN` | Upstash Redis REST token. `KV_REST_API_TOKEN` is the fallback. |
 | `DISCORD_BOT_TOKEN` | Bot token from the Discord Developer Portal. |
@@ -195,7 +206,7 @@ This is the primary deploy. One project runs the dashboard and the gateway.
 | `GATEWAY_SELF_CHAIN` | Optional. Default `true`. Set `false` to disable the next-window fetch. |
 | `VERCEL_PROJECT_PRODUCTION_URL` | Set by Vercel. The self-chain uses `https://` plus this host. If it is absent, the route uses the incoming request origin. |
 
-The status page configuration table is booleans only, including `DISCORD_BOT_TOKEN`, `CRON_SECRET`, `DISCORD_WAKE_URL`, `DISCORD_WAKE_KEY`, `BOT_USER_ID`, `AI_ROLE_ID`, `DISCORD_GUILD_ID`, `ADMIN_KEY`, and the Upstash names. `DISCORD_WAKE_URL` is shown as set when `BRIDGE_WAKE_URL` is set. The same applies to the wake key. Values are never rendered.
+The status page configuration table is booleans only, including `DISCORD_BOT_TOKEN`, `CRON_SECRET`, `DISCORD_WAKE_URL`, `DISCORD_WAKE_KEY`, `BOT_USER_ID`, `AI_ROLE_ID`, `DISCORD_GUILD_ID`, `ADMIN_KEY`, `WATCH_API_KEY`, and the Upstash names. `DISCORD_WAKE_URL` is shown as set when `BRIDGE_WAKE_URL` is set. The same applies to the wake key. Values are never rendered.
 
 Without Redis the console still loads. Heartbeats, events, the lock, and API keys are empty. Ingest returns **401**. The gateway route returns **500** `{ "error": "store unavailable" }`.
 

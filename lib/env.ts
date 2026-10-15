@@ -11,6 +11,7 @@ export const TRACKED_ENV_VARS = [
   "BOT_USER_ID",
   "AI_ROLE_ID",
   "DISCORD_GUILD_ID",
+  "WATCH_API_KEY",
 ] as const;
 
 export type TrackedEnvVar = (typeof TRACKED_ENV_VARS)[number];

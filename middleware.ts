@@ -7,7 +7,8 @@ export async function middleware(request: NextRequest) {
   if (
     pathname === "/login" ||
     pathname.startsWith("/api/ingest") ||
-    pathname.startsWith("/api/gateway")
+    pathname.startsWith("/api/gateway") ||
+    pathname.startsWith("/api/watch")
   ) {
     return NextResponse.next();
   }
